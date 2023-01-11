@@ -1,0 +1,507 @@
+var proxies = "__PROXIES__";
+var user_rules = { direct: [__USER_DIRECT__], over_proxy: [__USER_PROXY__] };
+var gfw_rules = { direct: [__GFW_DIRECT__], over_proxy: [__GFW_PROXY__] };
+
+var FilterMask = {
+  FROM_IMAGE: 1, // 1 << 0;
+  FROM_MEDIA: 1 << 1,
+  FROM_OBJECT: 1 << 2,
+  FROM_OTHER: 1 << 3,
+  FROM_PING: 1 << 4,
+  FROM_SCRIPT: 1 << 5,
+  FROM_STYLESHEET: 1 << 6,
+  FROM_SUBDOCUMENT: 1 << 7,
+  FROM_WEBSOCKET: 1 << 8, // e.g.: ws, ws
+  FROM_XMLHTTPREQUEST: 1 << 9,
+  FROM_FONT: 1 << 10,
+  FROM_HTTP: 1 << 11,
+  FROM_HTTPS: 1 << 12,
+  IS_IMPORTANT: 1 << 13,
+  MATCH_CASE: 1 << 14,
+  IS_REDIRECT_URL: 1 << 15,
+  THIRD_PARTY: 1 << 16,
+  FIRST_PARTY: 1 << 17,
+  _EXPLICIT_CANCEL: 1 << 26, // Unused
+  BAD_FILTER: 1 << 27,
+  GENERIC_HIDE: 1 << 30,
+
+  // Full document rules are not implied by negated types.
+  FROM_DOCUMENT: 1 << 29,
+
+  // Kind of pattern
+  IS_REGEX: 1 << 18,
+  IS_LEFT_ANCHOR: 1 << 19,
+  IS_RIGHT_ANCHOR: 1 << 20,
+  IS_HOSTNAME_ANCHOR: 1 << 21,
+  IS_EXCEPTION: 1 << 22,
+  IS_CSP: 1 << 23,
+  IS_COMPLETE_REGEX: 1 << 24,
+  IS_HOSTNAME_REGEX: 1 << 28,
+
+  // Specifies that a redirect rule should also create a corresponding block rule.
+  // This is used to avoid returning two separate rules from `NetworkFilter::parse`.
+  ALSO_BLOCK_REDIRECT: 1 << 31,
+
+  // "Other" network request types
+  UNMATCHED: 1 << 25,
+};
+
+mask_contains = function(mask1, mask2) {
+  return mask1 & mask2;
+};
+
+// REF: https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/String/endsWith
+if (!String.prototype.endsWith) {
+  String.prototype.endsWith = function(searchString, position) {
+    var subjectString = this.toString();
+    if (
+      typeof position !== "number" ||
+      !isFinite(position) ||
+      Math.floor(position) !== position ||
+      position > subjectString.length
+    ) {
+      position = subjectString.length;
+    }
+    position -= searchString.length;
+    var lastIndex = subjectString.indexOf(searchString, position);
+    return lastIndex !== -1 && lastIndex === position;
+  };
+}
+
+if (!String.prototype.startsWith) {
+  String.prototype.startsWith = function(searchString, position) {
+    var subjectString = this.toString();
+    if (
+      typeof position !== "number" ||
+      !isFinite(position) ||
+      Math.floor(position) !== position ||
+      position < 0
+    ) {
+      position = 0;
+    }
+    return subjectString.substring(position, position + searchString.length) === searchString;
+  };
+}
+
+function Rule(hostname, filter, mask, regex, is_regex, is_complete_regex, is_csp, is_redirect, is_important, is_hostname_anchor, is_left_anchor, is_right_anchor, for_http, for_https, first_party, third_party) {
+  return {
+    hostname: hostname,
+    filter: filter,
+    mask: mask,
+    regex: regex,
+    is_regex: is_regex,
+    is_complete_regex: is_complete_regex,
+    is_csp: is_csp,
+    is_redirect: is_redirect,
+    is_important: is_important,
+    is_hostname_anchor: is_hostname_anchor,
+    is_left_anchor: is_left_anchor,
+    is_right_anchor: is_right_anchor,
+    for_http: for_http,
+    for_https: for_https,
+    first_party: first_party,
+    third_party: third_party,
+  }
+};
+
+function Request(url, hostname) {
+  var is_http;
+  var is_https;
+  var is_websocket;
+
+  if (url.startsWith("http://")) {
+    is_http = true;
+  }
+  if (!is_http && url.startsWith("https://")) {
+    is_https = true;
+  }
+  if (
+    !is_http &&
+    !is_https &&
+    (url.startsWith("ws://") || url.startsWith("wss://"))
+  ) {
+    is_websocket = true;
+  }
+
+  var endsAt = url.indexOf(hostname) + hostname.length + 1;
+
+  var path = url.substring(endsAt);
+
+  return {
+    request_type: is_websocket ? "websocket" : "other",
+    url: url,
+    is_http: is_http,
+    is_https: is_https,
+    first_party: null,
+    third_party: null,
+    hostname: hostname,
+    path: path,
+    endsAt: endsAt,
+  };
+}
+
+
+/// Handle hostname anchored filters, given 'hostname' from ||hostname and
+/// request's hostname, check if there is a match. This is tricky because
+/// filters authors rely and different assumption. We can have prefix of suffix
+/// matches of anchor.
+function is_anchored_by_hostname(filter_hostname /*: string*/, hostname /*: string*/, wildcard_filter_hostname /* : bool */) {
+  var filter_hostname_len = filter_hostname.length;
+  // Corner-case, if `filterHostname` is empty, then it's a match
+  if (filter_hostname_len == 0) {
+    return true;
+  }
+  var hostname_len = hostname.length;
+
+  if (filter_hostname_len > hostname_len) {
+    // `filterHostname` cannot be longer than actual hostname
+    return false;
+  } else if (filter_hostname_len === hostname_len) {
+    // If they have the same len(), they should be equal
+    return filter_hostname === hostname;
+  } else {
+    var matchIndex = hostname.indexOf(filter_hostname);
+    if (matchIndex != null) { // Check if `filter_hostname` appears anywhere in `hostname`
+      if (matchIndex === 0) {
+        // `filter_hostname` is a prefix of `hostname` and needs to match full a label.
+        //
+        // Examples (filter_hostname, hostname):
+        //   * (foo, foo.com)
+        //   * (sub.foo, sub.foo.com)
+        return wildcard_filter_hostname || filter_hostname.endsWith('.') || hostname.substring(filter_hostname_len).startsWith('.');
+      } else if (matchIndex === hostname_len - filter_hostname_len) {
+        // `filter_hostname` is a suffix of `hostname`.
+        //
+        // Examples (filter_hostname, hostname):
+        //    * (foo.com, sub.foo.com)
+        //    * (com, foo.com)
+        return filter_hostname.startsWith('.') || hostname.substring(matchIndex - 1).startsWith('.')
+      } else {
+        // `filter_hostname` is infix of `hostname` and needs match full labels
+        return (wildcard_filter_hostname || filter_hostname.endsWith('.') || hostname.substring(filter_hostname_len).startsWith('.'))
+          && (filter_hostname.startsWith('.') || hostname.substring(matchIndex).startsWith('.'))
+      }
+    }
+    // No match
+    return false
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Filter matching
+// ---------------------------------------------------------------------------
+
+// pattern
+function check_pattern_plain_filter_filter(filter, request) {
+  if (filter.filter.method === "empty") {
+    return true;
+  }
+  if (filter.filter.method === "simple") {
+    return request.url.indexOf(filter.filter.pattern) !== -1;
+  }
+  if (filter.filter.method === "any_of") {
+    var filters = filter.filter.pattern;
+    for (var i = 0; i < filters.length; i++) {
+      if (request.url.indexOf(filters[i]) !== -1) {
+        return true;
+      }
+    }
+  }
+  return false
+}
+
+// pattern|
+function check_pattern_right_anchor_filter(filter, request) {
+  if (filter.filter.method === "empty") {
+    return true;
+  }
+  if (filter.filter.method === "simple") {
+    return request.url.endsWith(filter.filter.pattern);
+  }
+  if (filter.filter.method === "any_of") {
+    var filters = filter.filter.pattern;
+    for (var i = 0; i < filters.length; i++) {
+      if (request.url.endsWith(filters[i])) {
+        return true;
+      }
+    }
+  }
+  return false
+}
+
+// |pattern
+function check_pattern_left_anchor_filter(filter, request) {
+  if (filter.filter.method === "empty") {
+    return true;
+  }
+  if (filter.filter.method === "simple") {
+    return request.url.startsWith(filter.filter.pattern);
+  }
+  if (filter.filter.method === "any_of") {
+    var filters = filter.filter.pattern;
+    for (var i = 0; i < filters.length; i++) {
+      if (request.url.startsWith(filters[i])) {
+        return true;
+      }
+    }
+  }
+  return false
+}
+
+// |pattern|
+function check_pattern_left_right_anchor_filter(filter, request) {
+  if (filter.filter.method === "empty") {
+    return true;
+  }
+  if (filter.filter.method === "simple") {
+    return request.url === filter.filter.pattern;
+  }
+
+  if (filter.filter.method === "any_of") {
+    var filters = filter.filter.pattern;
+    for (var i = 0; i < filters.length; i++) {
+      if (request.url === filters[i]) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+// pattern*^
+function check_pattern_regex_filter_at(filter, request, start_from) {
+  var regex = filter.regex;
+  return shExpMatch(request.url.substring(start_from), regex)
+}
+
+function check_pattern_regex_filter(filter, request) {
+  return check_pattern_regex_filter_at(filter, request, 0)
+}
+
+// ||pattern*^
+function check_pattern_hostname_anchor_regex_filter(filter, request) {
+  var hostname = filter.hostname;
+  if (
+    is_anchored_by_hostname(
+      hostname,
+      request.hostname,
+      mask_contains(filter.mask, FilterMask.IS_HOSTNAME_REGEX)
+    )
+  ) {
+    return check_pattern_regex_filter_at(
+      filter,
+      request,
+      request.url.find(hostname).unwrap_or_default() + hostname.len()
+    );
+  }
+  return false;
+}
+
+// ||pattern|
+function check_pattern_hostname_right_anchor_filter(filter, request) {
+  var hostname = filter.hostname;
+  if (!hostname) {
+    return false;
+  }
+  if (
+    is_anchored_by_hostname(
+      hostname,
+      request.hostname,
+      mask_contains(filter.mask, FilterMask.IS_HOSTNAME_REGEX)
+    )
+  ) {
+    // In this specific case it means that the specified hostname should match
+    // at the end of the hostname of the request. This allows to prevent false
+    // positive like ||foo.bar which would match https://foo.bar.baz where
+    // ||foo.bar^ would not.
+    if (filter.filter.method == "empty") {
+      return (
+        request.hostname.length == hostname.length ||
+        request.hostname.endsWith(hostname)
+      );
+    }
+    return check_pattern_right_anchor_filter(filter, request);
+  }
+}
+
+// |||pattern|
+function check_pattern_hostname_left_right_anchor_filter(filter, request) {
+  // Since this is not a regex, the filter pattern must follow the hostname
+  // with nothing in between. So we extract the part of the URL following
+  // after hostname and will perform the matching on it.
+
+  var hostname = filter.hostname;
+  if (
+    is_anchored_by_hostname(
+      hostname,
+      request.hostname,
+      mask_contains(filter.mask, FilterMask.IS_HOSTNAME_REGEX)
+    )
+  ) {
+    // if no filter, we have a match
+    if (filter.filter.method == "empty") {
+      return true;
+    }
+    // Since it must follow immediatly after the hostname and be a suffix of
+    // the URL, we conclude that filter must be equal to the part of the
+    // url following the hostname.
+    if (filter.filter.method == "simple") {
+      return request.path == filter.filter.pattern;
+    }
+
+    if (filter.filter.method == "any_of") {
+      var url_after_hostname = request.path;
+      var filters = filter.filter.pattern;
+      for (var i = 0; i < filters.length; i++) {
+        if (url_after_hostname == filters[i]) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+}
+
+// ||pattern + left-anchor => This means that a plain pattern needs to appear
+// exactly after the hostname, with nothing in between.
+function check_pattern_hostname_left_anchor_filter(filter, request) {
+  var hostname = filter.hostname;
+  if (
+    is_anchored_by_hostname(
+      hostname,
+      request.hostname,
+      mask_contains(filter.mask, FilterMask.IS_HOSTNAME_REGEX)
+    )
+  ) {
+    // if no filter, we have a match
+    if (!filter.filter) {
+      return true;
+    }
+    // Since this is not a regex, the filter pattern must follow the hostname
+    // with nothing in between. So we extract the part of the URL following
+    // after hostname and will perform the matching on it.
+    if (filter.filter.method === "simple") {
+      request.path.startsWith(filter.filter.pattern);
+    }
+    if (filter.filter.method === "any_of") {
+      var filters = filter.filter.pattern;
+      var url_after_hostname = request.path;
+      for (var i = 0; i < filters.length; i++) {
+        if (url_after_hostname.indexOf(filters[i]) !== -1) {
+          return true;
+        }
+      }
+    }
+  }
+  return false;
+}
+
+// ||pattern
+function check_pattern_hostname_anchor_filter(filter, request) {
+  var hostname = filter.hostname;
+  if (
+    is_anchored_by_hostname(
+      hostname,
+      request.hostname,
+      mask_contains(filter.mask, FilterMask.IS_HOSTNAME_REGEX)
+    )
+  ) {
+    // if no filter, we have a match
+    if (filter.filter.method === "empty") {
+      return true;
+    }
+    // Filter hostname does not necessarily have to be a full, proper hostname, part of it can be lumped together with the URL
+    if (filter.filter.method === "simple") {
+      return request.path.indexOf(filter.filter.pattern) !== -1;
+    }
+    if (filter.filter.method === "any_of") {
+      var filters = filter.filter.pattern;
+      var url_after_hostname = request.path;
+      for (var i = 0; i < filters.length; i++) {
+        if (url_after_hostname.indexOf(filters[i]) !== -1) {
+          return true;
+        }
+      }
+    }
+  }
+  return false;
+}
+
+/// Efficiently checks if a certain network filter matches against a network
+/// request.
+function check_pattern(filter, request) {
+  if (filter.is_hostname_anchor) {
+    if (filter.is_regex) {
+      return check_pattern_hostname_anchor_regex_filter(filter, request);
+    } else if (filter.is_right_anchor && filter.is_left_anchor) {
+      return check_pattern_hostname_left_right_anchor_filter(filter, request);
+    } else if (filter.is_right_anchor) {
+      return check_pattern_hostname_right_anchor_filter(filter, request);
+    } else if (filter.is_left_anchor) {
+      return check_pattern_hostname_left_anchor_filter(filter, request);
+    } else {
+      return check_pattern_hostname_anchor_filter(filter, request);
+    }
+  } else if (filter.is_regex || filter.is_complete_regex) {
+    return check_pattern_regex_filter(filter, request);
+  } else if (filter.is_left_anchor && filter.is_right_anchor) {
+    return check_pattern_left_right_anchor_filter(filter, request);
+  } else if (filter.is_left_anchor) {
+    return check_pattern_left_anchor_filter(filter, request);
+  } else if (filter.is_right_anchor) {
+    return check_pattern_right_anchor_filter(filter, request);
+  } else {
+    return check_pattern_plain_filter_filter(filter, request);
+  }
+}
+
+function check_options(filter, request) /*-> bool*/ {
+  // We first discard requests based on type, protocol and party. This is really
+  // cheap and should be done first.
+  if (
+    (request.is_https && !filter.for_https) ||
+    (request.is_http && !filter.for_http) ||
+    (!filter.first_party && request.is_first_party == true) ||
+    (!filter.third_party && request.is_third_party == true)
+  ) {
+    return false;
+  }
+
+  if (filter.is_exception) {
+    return false;
+  }
+
+  return true;
+}
+
+function FindProxyForURL(url, host) {
+  var request = Request(url.toString(), host);
+  for (var i = 0; i < user_rules.direct.length; i++) {
+    var rule = user_rules.direct[i];
+    if (check_options(rule, request) && check_pattern(rule, request)) {
+      return "DIRECT";
+    }
+  }
+
+  for (var i = 0; i < user_rules.over_proxy.length; i++) {
+    var rule = user_rules.over_proxy[i];
+    if (check_options(rule, request) && check_pattern(rule, request)) {
+      return "DIRECT";
+    }
+  }
+
+  for (var i = 0; i < gfw_rules.direct.length; i++) {
+    var rule = gfw_rules.direct[i];
+    if (check_options(rule, request) && check_pattern(rule, request)) {
+      return proxies;
+    }
+  }
+
+  for (var i = 0; i < gfw_rules.over_proxy.length; i++) {
+    var rule = gfw_rules.over_proxy[i];
+    if (check_options(rule, request) && check_pattern(rule, request)) {
+      return proxies;
+    }
+  }
+  return "DIRECT";
+}

@@ -1,0 +1,16 @@
+[package]
+name = "proxy-autoconfig"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+toml = "0.5"
+anyhow = "1"
+base64 = "0.21"
+adblock = "0.6"
+serde = "1.0"
+serde_derive = "1.0"
+reqwest = { version = "0.11", features = ["socks", "deflate"] }
+tokio = { version = "1", features = ["fs", "rt", "io-util"] }
