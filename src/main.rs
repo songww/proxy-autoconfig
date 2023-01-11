@@ -1,19 +1,19 @@
-use axum::{service, prelude::*};
-use tower_http::services::ServeFile;
+use poem::{
+    endpoint::{EndpointExt, StaticFileEndpoint},
+    listener::TcpListener,
+    IntoResponse, Route, Server,
+};
 
 #[tokio::main]
-async fn main() {
-
-    let app = route(
-        // GET `/static/Cargo.toml` goes to a service from tower-http
+async fn main() -> Result<(), std::io::Error> {
+    let app = Route::new().at(
         "/proxy.pac",
-        service::get(ServeFile::new("/home/songww/.config/shadowsocks/shadowsocks.pac"))
-        // application/x-ns-proxy-autoconfig
+        StaticFileEndpoint::new("/home/songww/.config/shadowsocks/shadowsocks.pac").and_then(
+            |resp| async move { Ok(resp.with_content_type("application/x-ns-proxy-autoconfig")) },
+        ),
     );
 
-    // run it with hyper on localhost:3000
-    hyper::Server::bind(&"0.0.0.0:1089".parse().unwrap())
-        .serve(app.into_make_service())
+    Server::new(TcpListener::bind("127.0.0.1:3000"))
+        .run(app)
         .await
-        .unwrap();
 }
