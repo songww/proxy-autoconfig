@@ -1,6 +1,6 @@
 var proxies = "__PROXIES__";
-var user_rules = { direct: [__USER_DIRECT__], over_proxy: [__USER_PROXY__] };
-var gfw_rules = { direct: [__GFW_DIRECT__], over_proxy: [__GFW_PROXY__] };
+var user_rules = { direct: __USER_DIRECT__, over_proxy: __USER_PROXY__ };
+var gfw_rules = { direct: __GFW_DIRECT__, over_proxy: __GFW_PROXY__ };
 
 var FilterMask = {
   FROM_IMAGE: 1, // 1 << 0;
@@ -83,26 +83,26 @@ if (!String.prototype.startsWith) {
   };
 }
 
-function Rule(hostname, filter, mask, regex, is_regex, is_complete_regex, is_csp, is_redirect, is_important, is_hostname_anchor, is_left_anchor, is_right_anchor, for_http, for_https, first_party, third_party) {
-  return {
-    hostname: hostname,
-    filter: filter,
-    mask: mask,
-    regex: regex,
-    is_regex: is_regex,
-    is_complete_regex: is_complete_regex,
-    is_csp: is_csp,
-    is_redirect: is_redirect,
-    is_important: is_important,
-    is_hostname_anchor: is_hostname_anchor,
-    is_left_anchor: is_left_anchor,
-    is_right_anchor: is_right_anchor,
-    for_http: for_http,
-    for_https: for_https,
-    first_party: first_party,
-    third_party: third_party,
-  }
-};
+/* function Rule(hostname, filter, mask, regex, is_regex, is_complete_regex, is_csp, is_redirect, is_important, is_hostname_anchor, is_left_anchor, is_right_anchor, for_http, for_https, first_party, third_party) { */
+/*   return { */
+/*     hostname: hostname, */
+/*     filter: filter, */
+/*     mask: mask, */
+/*     regex: regex, */
+/*     is_regex: is_regex, */
+/*     is_complete_regex: is_complete_regex, */
+/*     is_csp: is_csp, */
+/*     is_redirect: is_redirect, */
+/*     is_important: is_important, */
+/*     is_hostname_anchor: is_hostname_anchor, */
+/*     is_left_anchor: is_left_anchor, */
+/*     is_right_anchor: is_right_anchor, */
+/*     for_http: for_http, */
+/*     for_https: for_https, */
+/*     first_party: first_party, */
+/*     third_party: third_party, */
+/*   } */
+/* }; */
 
 function Request(url, hostname) {
   var is_http;
@@ -123,21 +123,30 @@ function Request(url, hostname) {
     is_websocket = true;
   }
 
-  var endsAt = url.indexOf(hostname) + hostname.length + 1;
+  var endsAt = url.indexOf(hostname) + hostname.length;
 
   var path = url.substring(endsAt);
 
-  return {
-    request_type: is_websocket ? "websocket" : "other",
-    url: url,
-    is_http: is_http,
-    is_https: is_https,
-    first_party: null,
-    third_party: null,
-    hostname: hostname,
-    path: path,
-    endsAt: endsAt,
-  };
+  /* return { */
+  /*   request_type: is_websocket ? "websocket" : "other", */
+  /*   url: url, */
+  /*   is_http: is_http, */
+  /*   is_https: is_https, */
+  /*   first_party: null, */
+  /*   third_party: null, */
+  /*   hostname: hostname, */
+  /*   path: path, */
+  /*   endsAt: endsAt, */
+  /* }; */
+  this.request_type = is_websocket ? "websocket" : "other";
+  this.url = url;
+  this.is_http = is_http;
+  this.is_https = is_https;
+  this.first_party = null;
+  this.third_party = null;
+  this.hostname = hostname;
+  this.path = path;
+  this.endsAt = endsAt;
 }
 
 
@@ -467,15 +476,11 @@ function check_options(filter, request) /*-> bool*/ {
     return false;
   }
 
-  if (filter.is_exception) {
-    return false;
-  }
-
   return true;
 }
 
 function FindProxyForURL(url, host) {
-  var request = Request(url.toString(), host);
+  var request = new Request(url.toString(), host);
   for (var i = 0; i < user_rules.direct.length; i++) {
     var rule = user_rules.direct[i];
     if (check_options(rule, request) && check_pattern(rule, request)) {

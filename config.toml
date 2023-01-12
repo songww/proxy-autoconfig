@@ -1,5 +1,12 @@
 proxies = "SOCKS 127.0.0.1:1080; DIRECT"
 
+# default is: ~/.local/share/proxy-autoconfig/proxy.pac
+#pacfile = "~/.local/share/proxy-autoconfig/proxy.pac"
+
 [gfwlist]
 enabled = true
+
+# Used for fetch gfwlist
 proxy = "http://127.0.0.1:1087"
+
+#url = "https://raw.githubusercontent.com/gfwlist/gfwlist/master/gfwlist.txt"

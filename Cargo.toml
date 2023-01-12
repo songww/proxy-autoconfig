@@ -1,13 +1,21 @@
 [package]
-name = "autoconfig"
+name = "proxy-autoconfig"
 version = "0.1.0"
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
-[workspace]
-members = ["proxy-autoconfig"]
-
 [dependencies]
-poem = { version = "1.3.50", features = ["static-files"] }
-tokio = { version = "1.24.0", features = ["macros", "rt-multi-thread"] }
+dirs = "4.0"
+toml = "0.5"
+base64 = "0.21"
+adblock = "0.6"
+serde_json = "1.0"
+tracing-subscriber = "0.3"
+anyhow = { version = "1", features = ["backtrace"] }
+tokio = { version = "1", features = [ "rt-multi-thread" ] }
+clap = { version = "4.0", features = ["derive"] }
+serde = { version = "1.0", features = ["derive"] }
+poem = { version = "1.3", features = ["static-files"] }
+reqwest = { version = "0.11", features = ["socks", "deflate"] }
+tracing = { version = "0.1", features = ["max_level_info"] }
