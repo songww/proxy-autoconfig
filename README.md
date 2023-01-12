@@ -2,6 +2,7 @@
 Proxy auto config generation tool with gfwlist.
 
 # Install
+```bash
 # install to ~/.cargo/bin
 $ cargo install --git https://github.com/songww/proxy-autoconfig
 # create config dir
@@ -12,7 +13,7 @@ $ cp config.toml proxy.pac.template user-rules.txt ~/.config/proxy-autoconfig
 $ cp proxy-autoconfig.service ~/.config/systemd/user/
 $ systemctl --user daemon-reload
 $ systemctl --user enable proxy-autoconfig
-
+```
 # Config
 In the system network settings, set the proxy type to auto and the url to `http://127.0.0.1:1089`
 

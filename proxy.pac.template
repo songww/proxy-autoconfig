@@ -491,14 +491,14 @@ function FindProxyForURL(url, host) {
   for (var i = 0; i < user_rules.over_proxy.length; i++) {
     var rule = user_rules.over_proxy[i];
     if (check_options(rule, request) && check_pattern(rule, request)) {
-      return "DIRECT";
+      return proxies;
     }
   }
 
   for (var i = 0; i < gfw_rules.direct.length; i++) {
     var rule = gfw_rules.direct[i];
     if (check_options(rule, request) && check_pattern(rule, request)) {
-      return proxies;
+      return "DIRECT";
     }
   }
 
