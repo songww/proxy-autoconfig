@@ -1,6 +1,6 @@
 [Unit]
 Description=Proxy Auto Config Service
-After=shadowsocks.target
+#After=shadowsocks.target
 Wants=default.target
 
 [Service]
